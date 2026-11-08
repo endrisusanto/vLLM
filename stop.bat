@@ -1,0 +1,9 @@
+@echo off
+setlocal
+title Stop vLLM Server
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\stop.ps1"
+
+echo.
+pause
+

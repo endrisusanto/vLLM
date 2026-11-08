@@ -1,0 +1,83 @@
+name: Release Build & Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Tray Binary & Create Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compile Tray App (Native C# csc.exe)
+        shell: cmd
+        run: |
+          call build-tray.bat
+
+      - name: Verify Compiled Binary
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "./vLLM-Tray.exe")) {
+            Write-Error "vLLM-Tray.exe failed to compile!"
+            exit 1
+          }
+          $item = Get-Item "./vLLM-Tray.exe"
+          Write-Host "Binary built successfully: $($item.Length) bytes"
+
+      - name: Package Release ZIP
+        shell: pwsh
+        run: |
+          $ver = if ("${{ github.event.inputs.tag_name }}" -ne "") { "${{ github.event.inputs.tag_name }}" } else { "${{ github.ref_name }}" }
+          $zipName = "vllm-turnkey-windows-x64-$ver.zip"
+          
+          $filesToInclude = @(
+            "vLLM-Tray.exe",
+            "icon.ico",
+            "app.png",
+            "build-tray.bat",
+            "setup.bat",
+            "start.bat",
+            "stop.bat",
+            "docker-compose.yml",
+            ".env.example",
+            "README.md",
+            "scripts",
+            "src",
+            "models"
+          )
+          
+          Compress-Archive -Path $filesToInclude -DestinationPath $zipName -Force
+          Write-Host "Package created: $zipName"
+          echo "ZIP_PATH=$zipName" >> $env:GITHUB_ENV
+          echo "RELEASE_TAG=$ver" >> $env:GITHUB_ENV
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: vLLM Turnkey Windows ${{ env.RELEASE_TAG }}
+          files: |
+            ${{ env.ZIP_PATH }}
+            vLLM-Tray.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

@@ -1,0 +1,54 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-server
+    restart: unless-stopped
+    ipc: host
+    shm_size: '8gb'
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    volumes:
+      - ./models:/models:ro
+    environment:
+      - MODEL_NAME=${MODEL_NAME:-Qwen2.5-7B-Instruct-AWQ}
+      - QUANTIZATION=${QUANTIZATION:-awq}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.90}
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN:-8192}
+      - MAX_NUM_SEQS=${MAX_NUM_SEQS:-16}
+      - DTYPE=${DTYPE:-auto}
+      - API_KEY=${API_KEY:-}
+      - EXTRA_ARGS=${EXTRA_ARGS:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        CMD_ARGS="--model /models/$${MODEL_NAME} --host 0.0.0.0 --port 8000 --gpu-memory-utilization $${GPU_MEMORY_UTILIZATION:-0.90} --max-model-len $${MAX_MODEL_LEN:-8192} --max-num-seqs $${MAX_NUM_SEQS:-16} --dtype $${DTYPE:-auto}"
+        if [ -n "$$QUANTIZATION" ] && [ "$$QUANTIZATION" != "none" ] && [ "$$QUANTIZATION" != "auto" ]; then
+          CMD_ARGS="$$CMD_ARGS --quantization $$QUANTIZATION"
+        fi
+        if [ -n "$$API_KEY" ]; then
+          CMD_ARGS="$$CMD_ARGS --api-key $$API_KEY"
+        fi
+        if [ -n "$$EXTRA_ARGS" ]; then
+          CMD_ARGS="$$CMD_ARGS $$EXTRA_ARGS"
+        fi
+        echo "=========================================================="
+        echo " [vLLM Container Bootstrap]"
+        echo " Model Path   : /models/$$MODEL_NAME"
+        echo " Arguments    : $$CMD_ARGS"
+        echo "=========================================================="
+        exec python3 -m vllm.entrypoints.openai.api_server $$CMD_ARGS
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+

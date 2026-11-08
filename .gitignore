@@ -1,0 +1,24 @@
+# Environment & Secrets
+.env
+.env.local
+*.bak*
+
+# Model Weights (Do not commit gigabytes of weights)
+models/*
+!models/README.md
+
+# Release Artifacts
+*.zip
+*.tar.gz
+
+# Logs & Temp
+*.log
+.system_generated/
+__pycache__/
+*.pyc
+
+# OS Files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
