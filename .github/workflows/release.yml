@@ -17,20 +17,17 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: Build Tray Binary & Create Release
+  build-windows:
+    name: Build Windows Tray & Zip
     runs-on: windows-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Compile Tray App (Native C# csc.exe)
         shell: cmd
-        run: |
-          call build-tray.bat
+        run: call build-tray.bat
 
       - name: Verify Compiled Binary
         shell: pwsh
@@ -39,8 +36,6 @@ jobs:
             Write-Error "vLLM-Tray.exe failed to compile!"
             exit 1
           }
-          $item = Get-Item "./vLLM-Tray.exe"
-          Write-Host "Binary built successfully: $($item.Length) bytes"
 
       - name: Package Release ZIP
         shell: pwsh
@@ -52,39 +47,105 @@ jobs:
           } else {
             "v1.0.0"
           }
-          
           $zipName = "vllm-turnkey-windows-x64-$ver.zip"
-          
-          $filesToInclude = @(
-            "vLLM-Tray.exe",
-            "icon.ico",
-            "app.png",
-            "build-tray.bat",
-            "setup.bat",
-            "start.bat",
-            "stop.bat",
-            "docker-compose.yml",
-            ".env.example",
-            "README.md",
-            "scripts",
-            "src",
-            "models"
+          $files = @(
+            "vLLM-Tray.exe", "icon.ico", "app.png", "build-tray.bat",
+            "setup.bat", "start.bat", "stop.bat", "docker-compose.yml",
+            ".env.example", "README.md", "scripts", "src", "models"
           )
-          
-          Compress-Archive -Path $filesToInclude -DestinationPath $zipName -Force
-          Write-Host "Package created: $zipName"
-          echo "ZIP_PATH=$zipName" >> $env:GITHUB_ENV
-          echo "RELEASE_TAG=$ver" >> $env:GITHUB_ENV
+          Compress-Archive -Path $files -DestinationPath $zipName -Force
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: |
+            vLLM-Tray.exe
+            *.zip
+
+  build-debian:
+    name: Build Debian Package (.deb)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build .deb Package
+        run: |
+          # ponytail: native dpkg-deb packaging, zero extra dependencies
+          TAG="${{ github.event.inputs.tag_name || (github.ref_type == 'tag' && github.ref_name) || 'v1.0.0' }}"
+          VER="${TAG#v}"
+          PKG="vllm-turnkey_${VER}_amd64"
+
+          mkdir -p "$PKG/DEBIAN" "$PKG/opt/vllm-turnkey/models" "$PKG/usr/bin"
+
+          printf '%s\n' \
+            "Package: vllm-turnkey" \
+            "Version: $VER" \
+            "Section: utils" \
+            "Priority: optional" \
+            "Architecture: amd64" \
+            "Maintainer: Endri Susanto <endrisusantosekarang@gmail.com>" \
+            "Depends: bash, curl" \
+            "Recommends: docker-ce | docker.io" \
+            "Description: Turnkey Private LLM API (vLLM) Server" \
+            " Standalone automation package for vLLM OpenAI-compatible server on Docker." \
+            > "$PKG/DEBIAN/control"
+
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'set -e' \
+            'DIR="/opt/vllm-turnkey"' \
+            'cd "$DIR"' \
+            '[ ! -f .env ] && [ -f .env.example ] && cp .env.example .env' \
+            'case "${1:-status}" in' \
+            '  start)   docker compose up -d ;;' \
+            '  stop)    docker compose down ;;' \
+            '  restart) docker compose restart ;;' \
+            '  logs)    docker compose logs -f ;;' \
+            '  status)  docker compose ps ;;' \
+            '  *)       echo "Usage: vllm-turnkey {start|stop|restart|logs|status}"; exit 1 ;;' \
+            'esac' \
+            > "$PKG/usr/bin/vllm-turnkey"
+          chmod 755 "$PKG/usr/bin/vllm-turnkey"
+
+          cp docker-compose.yml .env.example README.md "$PKG/opt/vllm-turnkey/"
+          [ -f models/README.md ] && cp models/README.md "$PKG/opt/vllm-turnkey/models/"
+
+          dpkg-deb --build --root-owner-group "$PKG"
+
+      - name: Upload Debian Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-assets
+          path: "*.deb"
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [build-windows, build-debian]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-assets
+          path: dist
+
+      - name: Download Debian Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: debian-assets
+          path: dist
+
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: vLLM Turnkey Windows ${{ env.RELEASE_TAG }}
-          files: |
-            ${{ env.ZIP_PATH }}
-            vLLM-Tray.exe
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          name: vLLM Turnkey ${{ github.event.inputs.tag_name || github.ref_name }}
+          files: dist/*
           draft: false
           prerelease: false
           generate_release_notes: true
